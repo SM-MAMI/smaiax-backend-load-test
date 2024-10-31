@@ -29,3 +29,11 @@ locust -f locustfile.py
 
 This will start a web server on `http://localhost:8089` where you can configure the number of users and the spawn rate for the load test.
 
+## Running the performance test
+You can run the performance test by executing the following command:
+
+```bash
+python performance_test.py
+```
+
+This will run the performance test and generate a pdf file with the results.
