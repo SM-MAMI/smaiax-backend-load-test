@@ -38,7 +38,7 @@ def plot_performance_metrics(performances, user_counts):
     fig, ax = plt.subplots(figsize=(5, 3))
     fig.tight_layout()
 
-    scenarios = ["register", "login", "refresh", "logout", "add_smart_meter", "get_smart_meters",
+    scenarios = ["register", "login", "logout", "add_smart_meter", "get_smart_meters",
                  "get_smart_meter_by_id", "update_smart_meter", "add_metadata"]
     for scenario in scenarios:
         data = []

@@ -1,5 +1,4 @@
 from datetime import datetime
-
 from locust import HttpUser, task, between
 from faker import Faker
 
@@ -7,14 +6,38 @@ faker = Faker()
 
 class APIUser(HttpUser):
     wait_time = between(1, 2.5)
+    email = None
+    password = None
+    access_token = None
+    refresh_token = None
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def on_start(self):
+        """Runs once per user at the start of the test."""
+        # Register and login the user
+        response, self.email, self.password = self.register_user()
+        if response.status_code == 200:
+            login_response = self.login_user(self.email, self.password)
+            if login_response.status_code == 200:
+                self.access_token = login_response.json().get("accessToken")
+                self.refresh_token = login_response.json().get("refreshToken")
+            else:
+                print(f"Login failed for user {self.email}: {login_response.text}")
+                self.access_token = None
+                self.refresh_token = None
+        else:
+            print(f"Registration failed for user {self.email}: {response.text}")
+            self.access_token = None
+            self.refresh_token = None
+
+    def on_stop(self):
+        """Runs once per user at the end of the test."""
+        if self.access_token:
+            self.logout_user()
 
     def register_user(self):
         first_name = faker.first_name()
         last_name = faker.last_name()
-        email = first_name.lower() + "." + last_name.lower() + "." + faker.uuid4() + "@example.com"
+        email = f"{first_name.lower()}.{last_name.lower()}.{faker.uuid4()}@example.com"
         password = faker.password()
         data = {
             "email": email,
@@ -32,234 +55,90 @@ class APIUser(HttpUser):
             "username": email,
             "password": password
         }
-        response = self.client.post("/api/authentication/login", json=login_data, name="login")
-        return response
+        return self.client.post("/api/authentication/login", json=login_data, name="login")
 
-    def create_smart_meter(self, access_token):
-        smart_meter_data = {
-            "name": faker.word()
-        }
-        response = self.client.post("/api/smartMeters", json=smart_meter_data,
-                                    headers={"Authorization": f"Bearer {access_token}"}, name="add_smart_meter")
-        return response
-
-    @task
-    def register(self):
-        response, email, _ = self.register_user()
-        if response.status_code != 200:
-            print(f"User {email} registration failed")
-            print(response.text)
-
-    @task
-    def login(self):
-        response, email, password = self.register_user()
-        if response.status_code != 200:
-            print(f"User {email} registration failed")
-            print(response.text)
-            return
-
-        response = self.login_user(email, password)
-        if response.status_code != 200:
-            print(f"User {email} login failed")
-            print(response.text)
-
-    @task
-    def refresh(self):
-        response, email, password = self.register_user()
-        if response.status_code != 200:
-            print(f"User {email} registration failed")
-            print(response.text)
-            return
-
-        response = self.login_user(email, password)
-        if response.status_code != 200:
-            print(f"User {email} login failed")
-            print(response.text)
-            return
-
-        token = response.json()
-        refresh_data = {
-            "accessToken": token["accessToken"],
-            "refreshToken": token["refreshToken"]
-        }
-        response = self.client.post("/api/authentication/refresh", json=refresh_data, name="refresh")
-        if response.status_code != 200:
-            print(f"User {email} refresh failed")
-            print(response.text)
-
-    @task
-    def logout(self):
-        response, email, password = self.register_user()
-        if response.status_code != 200:
-            print(f"User {email} registration failed")
-            print(response.text)
-            return
-
-        response = self.login_user(email, password)
-        if response.status_code != 200:
-            print(f"User {email} login failed")
-            print(response.text)
-            return
-
-        token = response.json()
+    def logout_user(self):
         logout_data = {
-            "accessToken": token["accessToken"],
-            "refreshToken": token["refreshToken"]
+            "accessToken": self.access_token,
+            "refreshToken": self.refresh_token
         }
         response = self.client.post("/api/authentication/logout", json=logout_data, name="logout")
         if response.status_code != 200:
-            print(f"User {email} logout failed")
-            print(response.text)
+            print(f"Logout failed for user {self.email}: {response.text}")
+
+    def create_smart_meter(self):
+        smart_meter_data = {
+            "name": faker.word()
+        }
+        return self.client.post("/api/smartMeters", json=smart_meter_data,
+                                headers={"Authorization": f"Bearer {self.access_token}"}, name="add_smart_meter")
 
     @task
     def add_smart_meter(self):
-        response, email, password = self.register_user()
-        if response.status_code != 200:
-            print(f"User {email} registration failed")
-            print(response.text)
-            return
-
-        response = self.login_user(email, password)
-        if response.status_code != 200:
-            print(f"User {email} login failed")
-            print(response.text)
-            return
-
-        token = response.json()
-        access_token = token["accessToken"]
-
-        response = self.create_smart_meter(access_token)
-        if response.status_code != 201:
-            print(f"Add smart meter failed")
-            print(response.text)
+        if self.access_token:
+            response = self.create_smart_meter()
+            if response.status_code != 201:
+                print("Add smart meter failed")
+                print(response.text)
 
     @task
     def get_smart_meters(self):
-        response, email, password = self.register_user()
-        if response.status_code != 200:
-            print(f"User {email} registration failed")
-            print(response.text)
-            return
-
-        response = self.login_user(email, password)
-        if response.status_code != 200:
-            print(f"User {email} login failed")
-            print(response.text)
-            return
-
-        token = response.json()
-        access_token = token["accessToken"]
-
-        for _ in range(3):
-            self.create_smart_meter(access_token)
-
-        response = self.client.get("/api/smartMeters", headers={"Authorization": f"Bearer {access_token}"}, name="get_smart_meters")
-        if response.status_code != 200:
-            print("Get smart meters failed")
-            print(response.text)
+        if self.access_token:
+            for _ in range(3):
+                self.create_smart_meter()
+            response = self.client.get("/api/smartMeters",
+                                       headers={"Authorization": f"Bearer {self.access_token}"}, name="get_smart_meters")
+            if response.status_code != 200:
+                print("Get smart meters failed")
+                print(response.text)
 
     @task
     def get_smart_meter_by_id(self):
-        response, email, password = self.register_user()
-        if response.status_code != 200:
-            print(f"User {email} registration failed")
-            print(response.text)
-            return
-
-        response = self.login_user(email, password)
-        if response.status_code != 200:
-            print(f"User {email} login failed")
-            print(response.text)
-            return
-
-        token = response.json()
-        access_token = token["accessToken"]
-
-        response = self.create_smart_meter(access_token)
-        if response.status_code != 201:
-            print("Create smart meter failed")
-            print(response.text)
-            return
-
-        smart_meter_id = response.headers["Location"].split("/")[-1]
-        response = self.client.get(f"/api/smartMeters/{smart_meter_id}",
-                                   headers={"Authorization": f"Bearer {access_token}"}, name="get_smart_meter_by_id")
-        if response.status_code != 200:
-            print("Get smart meter by id failed")
-            print(response.text)
+        if self.access_token:
+            response = self.create_smart_meter()
+            if response.status_code == 201:
+                smart_meter_id = response.headers["Location"].split("/")[-1]
+                response = self.client.get(f"/api/smartMeters/{smart_meter_id}",
+                                           headers={"Authorization": f"Bearer {self.access_token}"}, name="get_smart_meter_by_id")
+                if response.status_code != 200:
+                    print("Get smart meter by id failed")
+                    print(response.text)
 
     @task
     def update_smart_meter(self):
-        response, email, password = self.register_user()
-        if response.status_code != 200:
-            print(f"User {email} registration failed")
-            print(response.text)
-            return
+        if self.access_token:
+            response = self.create_smart_meter()
+            if response.status_code == 201:
+                smart_meter_id = response.headers["Location"].split("/")[-1]
+                update_data = {
+                    "id": smart_meter_id,
+                    "name": faker.word()
+                }
+                response = self.client.put(f"/api/smartMeters/{smart_meter_id}", json=update_data,
+                                           headers={"Authorization": f"Bearer {self.access_token}"}, name="update_smart_meter")
+                if response.status_code != 200:
+                    print("Update smart meter failed")
+                    print(response.text)
 
-        response = self.login_user(email, password)
-        if response.status_code != 200:
-            print(f"User {email} login failed")
-            print(response.text)
-            return
-
-        token = response.json()
-        access_token = token["accessToken"]
-
-        response = self.create_smart_meter(access_token)
-        if response.status_code != 201:
-            print("Create smart meter failed")
-            print(response.text)
-            return
-
-        smart_meter_id = response.headers["Location"].split("/")[-1]
-        update_data = {
-            "id": smart_meter_id,
-            "name": faker.word()
-        }
-        response = self.client.put(f"/api/smartMeters/{smart_meter_id}", json=update_data,
-                                   headers={"Authorization": f"Bearer {access_token}"}, name="update_smart_meter")
-        if response.status_code != 200:
-            print("Update smart meter failed")
-            print(response.text)
-
-    # @task
-    # def add_metadata(self):
-    #     response, email, password = self.register_user()
-    #     if response.status_code != 200:
-    #         print(f"User {email} registration failed")
-    #         print(response.text)
-    #         return
-    #
-    #     response = self.login_user(email, password)
-    #     if response.status_code != 200:
-    #         print(f"User {email} login failed")
-    #         print(response.text)
-    #         return
-    #
-    #     token = response.json()
-    #     access_token = token["accessToken"]
-    #
-    #     response = self.create_smart_meter(access_token)
-    #     if response.status_code != 201:
-    #         print("Create smart meter failed")
-    #         print(response.text)
-    #         return
-    #
-    #     smart_meter_id = response.headers["Location"].split("/")[-1]
-    #     metadata_data = {
-    #         "validFrom": datetime.utcnow().isoformat() + 'Z',
-    #         "location": {
-    #             "streetName": faker.street_name(),
-    #             "city": faker.city(),
-    #             "state": faker.state(),
-    #             "country": faker.country(),
-    #             "continent": faker.random_int(0, 6)
-    #         },
-    #         "householdSize": faker.random_int(1, 10)
-    #     }
-    #
-    #     response = self.client.post(f"/api/smartMeters/{smart_meter_id}/metadata", json=metadata_data,
-    #                                 headers={"Authorization": f"Bearer {access_token}"}, name="add_metadata")
-    #     if response.status_code != 200:
-    #         print("Add metadata failed")
-    #         print(response.text)
+    @task
+    def add_metadata(self):
+        if self.access_token:
+            response = self.create_smart_meter()
+            if response.status_code == 201:
+                smart_meter_id = response.headers["Location"].split("/")[-1]
+                metadata_data = {
+                    "validFrom": datetime.utcnow().isoformat() + 'Z',
+                    "location": {
+                        "streetName": faker.street_name(),
+                        "city": faker.city(),
+                        "state": faker.state(),
+                        "country": faker.country(),
+                        "continent": faker.random_int(0, 6)
+                    },
+                    "householdSize": faker.random_int(1, 10)
+                }
+                response = self.client.post(f"/api/smartMeters/{smart_meter_id}/metadata", json=metadata_data,
+                                            headers={"Authorization": f"Bearer {self.access_token}"}, name="add_metadata")
+                if response.status_code != 200:
+                    print("Add metadata failed")
+                    print(response.text)
